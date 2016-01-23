@@ -1,0 +1,184 @@
+# Machine Learning Assignment
+pmarkt  
+Sunday, January 17, 2015  
+#### Background
+Human activity recognition research has traditionally focused on discriminating between different activities, i.e. to predict "which" activity was performed at a specific point in time. The approach taken with this analysis is to investigate "how well" an activity was performed by the wearer. 
+
+The goal of this analysis is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+Citation of the authors of the study / data:
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+#### Data
+The training data for this project were obtained from:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data were obtained here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+This analysis will build a model that we can use to predict the manner in which the participants did the exercise. This is the "classe" variable in the training set. 
+
+## Building the Model
+First I load all of the needed libraries and read in the training dataset. 
+
+```r
+library(randomForest)
+library(caret)
+library(dplyr)
+library(ggplot2)
+
+#Read in training data
+training <- read.csv("./pml-training.csv")
+```
+
+Because the training dataset is large,  I am going to split the training dataset into a training and a test dataset, for cross-validation purposes. I included 60% of the data in the training dataset, and the other 40% in the test dataset. I will use this test dataset to cross-validate the model before applying it to the test dataset provided for the assignment, which now becomes the validation dataset.
+
+```r
+#Create a training and test set from just the training dataset
+set.seed(5820)
+inTrain <- createDataPartition(y=training$classe,p=0.60,list=FALSE)
+train0 <- training[inTrain,]  ## training part of the training dataset
+test0 <- training[-inTrain,]  ## testing part of the training dataset (for cross validation)
+```
+
+I eliminate the columns of the dataset that are administrative in nature (columns 1-7) and also check for columns of data with zero or near zero variance. Then I eliminated variables that contain more than 97% missing values.I also checked for predictor variables that are highly correlated with each other, and eliminated some of them to avoid over-fitting the model.  At each of these steps, I visually inspected the variables and eliminated the appropriate ones. This leaves me with a dataset with 46 variables.
+
+
+```r
+# Delete the first 7 columns that contain administrative information
+train1 <- train0[,8:160]
+
+# delete all columns with near zero variance
+nzv <- nearZeroVar(train1,saveMetrics=TRUE)
+nzv
+train2 <- train1[,c(1:4,11:12,14:15,17:18,20:43,53:61,68:71,73,75:79,
+          86:87,89:90,92:93,95:117,124:125,127:128,130:131,133:134,144:153)]
+summary(train2)
+
+# delete all columns with more than 97% missing values
+missingvals <- data.frame(100)
+for (i in 1:100)  {
+missingvals[i] <- sum(is.na(train2[,i])/nrow(train2)) 
+}
+missingvals
+
+# Eliminate variables with more than 97% missing values
+train2 <- train2[c(1:4,21:33,35:43,51:53,71:82,89,91:100)]
+
+# Eliminate variables that have high correlations between them to prevent overfitting
+# To do this, I first have to convert all values to numeric values
+train3 <- train2
+for (i in 1:52) {
+     train3[,i] <- as.numeric(train3[,i])
+}
+corr <- cor(train3[-53],use="pairwise.complete.obs")
+hicorr <- findCorrelation(corr, cutoff=0.75, verbose=FALSE)
+colnames(train3)[hicorr]
+# I can now eliminate some of the 17 variables below because they are highly corrlated with others
+corrmatrix <- matrix(corr[hicorr,hicorr], nrow=17, ncol=17, dimnames=list(colnames(train3)[hicorr]))
+colnames(corrmatrix)<- colnames(train3)[hicorr]
+corrmatrix[(corrmatrix > -0.75 & corrmatrix < 0.75)] <- NA
+# Create a new dataset, train4, with just the relevant variables (46 variables)
+train4 <- train2[,c(3,5:8,10:21,23:36,38:52)]
+```
+
+Now we create the random forest model, and plot the variable importance. Initially I ran the train function using the "rf" method, with cross validation, and I obtained a model with over 99% accuracy. But this was very cumbersome, took too long to run, and also appeared to be overfitting the model. (It created a model with 500 trees.) I then decided to create a Random Forest model using the R randomForest command, specifying the number of trees that I wanted to create in the model. I first attempted to build a model with 10 trees, with a resulting accuracy of < 95%. I then tried 15 trees, which provided a very high accuracy (>98% accuracy), and ultimately I settled on a model with 13 trees, which obtained an accuracy of just over 95%. I felt that this model was a compromise between accuracy and practicality of actually running the model.
+
+
+```r
+# Create a random forest model
+set.seed(3726)
+fit <- randomForest(as.factor(classe) ~ .,data=train4, importance=TRUE, ntree=13,method="pca")
+varImpPlot(fit,cex=.6)
+```
+
+![](index_files/figure-html/unnamed-chunk-4-1.png) 
+
+```r
+fit
+```
+
+```
+## 
+## Call:
+##  randomForest(formula = as.factor(classe) ~ ., data = train4,      importance = TRUE, ntree = 13, method = "pca") 
+##                Type of random forest: classification
+##                      Number of trees: 13
+## No. of variables tried at each split: 6
+## 
+##         OOB estimate of  error rate: 4.63%
+## Confusion matrix:
+##      A    B    C    D    E class.error
+## A 3306   19    4   11    3  0.01106790
+## B   64 2127   47   18   15  0.06340819
+## C   16   76 1909   33   16  0.06878049
+## D   17   23   74 1798   14  0.06645898
+## E    7   34   26   27 2064  0.04355885
+```
+
+## Cross Validation
+Because I split my original training dataset into a training and test portion, I did not perform any other type of cross-validation. I will test the accuracy of my model by predicting values from the test0 dataset that I removed from the original training data that was provided.
+
+
+```r
+# predict values for the testing portion of the training dataset
+pred <- predict(fit,test0)
+#reset the levels (1=A, 2=B, etc.)
+levels(pred) <- c("A","B","C","D","E")
+```
+
+## Calculate the Expected Sample Error
+The error for this dataset is just under 2%, which indicates that my model is very accurate. 
+
+```r
+#calculate out of sample accuracy
+test0$predRight <- pred==test0$classe
+table(pred,test0$classe)
+```
+
+```
+##     
+## pred    A    B    C    D    E
+##    A 2215   20    0    1    0
+##    B   11 1473   18    0    3
+##    C    3   21 1342   25    5
+##    D    1    0    6 1252    6
+##    E    2    4    2    8 1428
+```
+
+```r
+accuracy <- (sum(test0$predRight==TRUE))/nrow(test0)
+accuracy
+```
+
+```
+## [1] 0.9826663
+```
+
+```r
+outofsampleerror <- 1 - accuracy
+outofsampleerror
+```
+
+```
+## [1] 0.01733367
+```
+
+## Predicting the 20 test cases
+
+Lastly, I read in the testing dataset provided for the assignment, and predicted the classe variable for each of the test cases. The predicted results were submitted for the final quiz. All results were correct.
+
+
+```r
+# Read in the testing validation data provided for the project and
+#   predict the classe variable for this data. 
+testingvalidationdata <- read.csv("./pml-testing.csv")
+predvalidation <- predict(fit,testingvalidationdata)
+predvalidation
+```
+
+```
+##  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 
+##  B  A  B  A  A  E  D  B  A  A  B  C  B  A  E  E  A  B  B  B 
+## Levels: A B C D E
+```
